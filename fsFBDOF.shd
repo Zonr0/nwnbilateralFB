@@ -1,0 +1,91 @@
+//precision highp float;
+varying vec2 vTcOut; //normalized fragment coordinates
+uniform sampler2D texUnit0; // Screen space texture
+uniform int screenWidth;
+uniform int screenHeight;
+
+
+//1D Gaussian curve
+float normpdf(in float x, in float sigma)
+{
+	return 0.39894*exp(-0.5*x*x/(sigma*sigma))/sigma;
+}
+
+//2D Gaussian curve
+float normpdf2d(in float x, in float y, in float sigma)
+{
+	return 0.39894*exp(-0.5*(x*x + y*y) / (sigma*sigma))/sigma;
+}
+
+//Grayscale approximation
+float ColorToLuma(vec3 vColor)
+{
+    return dot(vColor, vec3(0.299, 0.587, 0.114)); //Quick formula. 
+}
+
+void main()
+{
+    //TWEAKABLE VALUES
+    //Radius of the pixels sampled for the blur. Larger values require exponentially
+    //more computational power.
+    int radius = 2;
+    //Parameters for the gaussian curves. In short, values larger then these sigmas will
+    //be much lower weighted.
+    //Distance of pixels from the origin pixel. Roughly how strong the blur is.
+    float sigma_spatial = 6.;
+    //Difference in luminosity. Roughly how well the edges are preserved. Note that
+    //luminosity is a value between [0,1] and since we're taking the difference, even fairly
+    //hard edges will have low values. 
+    float sigma_range = .1; 
+
+
+    float dx = 1.0 / float(screenWidth);
+    float dy = 1.0 / float(screenHeight);
+    vec3 currentColor = texture2D(texUnit0,vTcOut).xyz;
+    vec3 res = vec3(0.0);
+    float normalization = 0.0;
+    
+    for(int i = -radius; i <= radius; i++) {
+        for(int j = -radius; j <= radius; j++) {
+            float x_sample = vTcOut.x;
+            float y_sample = vTcOut.y;
+            x_sample = vTcOut.x + (float(i) * dx);
+            y_sample = vTcOut.y + (float(j) * dy);
+            
+            //We need to mirror edges otherwise we will get artifacting and bugs when
+            //we are at the edge of the screen and trying to combine pixels off-screen.
+            if(x_sample < 0.) { x_sample = -x_sample; }
+            if(y_sample < 0.) { y_sample = -y_sample; }
+            if(x_sample >= 1.) { x_sample = 1. - (float(i) * dx); }
+            if(x_sample >= 1.) { y_sample = 1. - (float(j) * dy); }
+            
+            vec2 sampleUV = vec2(x_sample, y_sample);
+            vec3 tempColor = texture2D(texUnit0,sampleUV).xyz;
+        	
+            //We don't have to convert to normalized coordinates here. Our spatial
+            //gauss function is constructed off the pixel difference.
+            float gauss_spatial = normpdf2d(float(i),float(j),sigma_spatial);
+            //Get the vector difference of the color, convert it to greyscale(luminosity),
+            //and then pass it into the gaussian function.
+            float gauss_range = normpdf(ColorToLuma(currentColor - tempColor),sigma_range);
+
+
+            float weight = gauss_spatial * gauss_range;
+            //Because our gaussian function will return values outside of [0,1], we need to
+            //normalize it back down to that range later.
+            normalization += weight;
+            //Sum up all of the products of all surrounding pixel color values and 
+            //their corresponding weights.
+            res = res + (tempColor * weight);
+        }
+    }
+    
+            
+    // Normalize the colors back down to [0,1]. Final color is the sum of the products of
+    //the surrounding pixel colors and their associated weights divided by the sum of the
+    //weights of all surrounding pixels.
+    res /= normalization;
+    
+    //output pixel
+    gl_FragColor = vec4(res,1.0);
+}
